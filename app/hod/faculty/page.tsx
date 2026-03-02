@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Search, ChevronUp, ChevronDown, Eye } from "lucide-react";
 import { containerVariants, itemVariants } from "@/lib/animations";
@@ -23,6 +23,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import axios from "axios";
+import { useAuth } from "@/app/AuthProvider";
+import Loader from "@/components/loader";
+
+const BACKEND = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:5000").replace(/\/$/, "");
 
 // ── Status config ────────────────────────────────────────────────────────────
 
@@ -67,19 +72,87 @@ interface FacultyRow {
   marks: number | null;
 }
 
-const MOCK_DATA: FacultyRow[] = [];   // will be replaced by API
-
 type SortKey = "name" | "marks";
 type SortDir = "asc" | "desc";
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function HodFacultyPage() {
+  const { user, token } = useAuth();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [designationFilter, setDesignationFilter] = useState<string>("all");
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; dir: SortDir }>({ key: "name", dir: "asc" });
-  const [data] = useState<FacultyRow[]>(MOCK_DATA);
+  const [data, setData] = useState<FacultyRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch appraisals by department
+  useEffect(() => {
+    const fetchAppraisals = async () => {
+      
+      // if (!user?.department || !token) {
+      //   console.log("Missing user department or token, skipping fetch", { department: user, token: !!token });
+      //   setLoading(false);
+      //   return;
+      // }
+
+      setLoading(true);
+      setError(null);
+      try {
+
+        // Fetch appraisals for the department
+        const response = await axios.get(
+          `${BACKEND}/appraisal/department/${encodeURIComponent(user.department)}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        console.log("Appraisals response:", response.data);
+
+        if (response.data.success) {
+          // Map backend data to FacultyRow format
+          const appraisals = response.data.data || [];
+          const facultyRows: FacultyRow[] = appraisals.map((appraisal: any) => {
+            // Map status to StatusKey
+            const statusMap: Record<string, StatusKey> = {
+              "Pending": "pending",
+              "Verification Pending": "verification_pending",
+              "Portfolio Marks Pending": "portfolio_mark_pending",
+              "Interaction Pending": "interaction_pending",
+              "Marks Verification Pending": "authority_verification_pending",
+              "Completed": "done",
+              "Sent to Director": "sent_to_director",
+            };
+
+            const status = statusMap[appraisal.status] || "pending";
+
+            return {
+              id: appraisal.userId,
+              name: appraisal.userId, // Will be displayed as userId for now
+              designation: appraisal.designation,
+              status,
+              marks: appraisal.summary?.grandTotalVerified ?? null,
+            };
+          });
+
+          setData(facultyRows);
+        } else {
+          setError(response.data.message || "Failed to fetch appraisals");
+        }
+      } catch (err: any) {
+        console.error("Error fetching appraisals:", err);
+        setError(err.response?.data?.message || "Failed to fetch appraisals");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAppraisals();
+  }, [user?.department, token]);
 
   const toggleSort = (key: SortKey) => {
     setSortConfig((prev) =>
@@ -126,6 +199,23 @@ export default function HodFacultyPage() {
     { label: "Pending",       value: summary.pending ?? 0, cls: "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200" },
     { label: "Sent to Director", value: summary.sent_to_director ?? 0, cls: "bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200" },
   ];
+
+  if (loading) {
+    return <Loader message="Loading faculty appraisals..." />;
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Card className="max-w-md border-destructive/50">
+          <CardContent className="p-6 text-center">
+            <p className="text-destructive font-semibold mb-2">Error</p>
+            <p className="text-muted-foreground">{error}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <>
